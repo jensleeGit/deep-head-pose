@@ -89,9 +89,10 @@ if __name__ == '__main__':
 
     # ResNet50 structure
     model = hopenet.Hopenet(torchvision.models.resnet.Bottleneck, [3, 4, 6, 3], 66)
-
+    # 如果1snapshot不存在，下载snapshot模型
     if args.snapshot == '':
         load_filtered_state_dict(model, model_zoo.load_url('https://download.pytorch.org/models/resnet50-19c8e357.pth'))
+    # 模型的恢复，如果存在snapshot，则恢复模型
     else:
         saved_state_dict = torch.load(args.snapshot)
         model.load_state_dict(saved_state_dict)
@@ -128,12 +129,16 @@ if __name__ == '__main__':
                                                num_workers=2)
 
     model.cuda(gpu)
+    # 计算torch的交叉损失函数
     criterion = nn.CrossEntropyLoss().cuda(gpu)
+    # 回归的均方损失函数
     reg_criterion = nn.MSELoss().cuda(gpu)
     # Regression loss coefficient
+    # 回归损失的权重
     alpha = args.alpha
 
     softmax = nn.Softmax().cuda(gpu)
+    # 三个角度分为66类，比如每三度是一类,这是分类的效果
     idx_tensor = [idx for idx in xrange(66)]
     idx_tensor = Variable(torch.FloatTensor(idx_tensor)).cuda(gpu)
 
@@ -145,19 +150,24 @@ if __name__ == '__main__':
     print 'Ready to train network.'
     for epoch in range(num_epochs):
         for i, (images, labels, cont_labels, name) in enumerate(train_loader):
+            # torch tensor格式，64 * 3 * 224 * 224
             images = Variable(images).cuda(gpu)
 
             # Binned labels
+            # ground truth 真实值
+            # 64张图片的角度值，yaw， pitch， roll
             label_yaw = Variable(labels[:,0]).cuda(gpu)
             label_pitch = Variable(labels[:,1]).cuda(gpu)
             label_roll = Variable(labels[:,2]).cuda(gpu)
 
             # Continuous labels
+            # 都是64维，具体含义未知，yaw， pitch， roll
             label_yaw_cont = Variable(cont_labels[:,0]).cuda(gpu)
             label_pitch_cont = Variable(cont_labels[:,1]).cuda(gpu)
             label_roll_cont = Variable(cont_labels[:,2]).cuda(gpu)
 
             # Forward pass
+            # 此时模型预测出角度值 每个角度值为64 × 60
             yaw, pitch, roll = model(images)
 
             # Cross entropy loss
@@ -166,19 +176,25 @@ if __name__ == '__main__':
             loss_roll = criterion(roll, label_roll)
 
             # MSE loss
+            # 回归损失,此时的维度是64*60
             yaw_predicted = softmax(yaw)
             pitch_predicted = softmax(pitch)
             roll_predicted = softmax(roll)
-
+            
+            # 此为分类结果，分类结果乘以对应区间，然后×三度，减去99度，即为原来的度数
+            # 按行求和,都是64维
             yaw_predicted = torch.sum(yaw_predicted * idx_tensor, 1) * 3 - 99
             pitch_predicted = torch.sum(pitch_predicted * idx_tensor, 1) * 3 - 99
             roll_predicted = torch.sum(roll_predicted * idx_tensor, 1) * 3 - 99
 
+            # 计算回归函数损失
+            # 此时yaw_predicted, label_yaw_cont都是64维
             loss_reg_yaw = reg_criterion(yaw_predicted, label_yaw_cont)
             loss_reg_pitch = reg_criterion(pitch_predicted, label_pitch_cont)
             loss_reg_roll = reg_criterion(roll_predicted, label_roll_cont)
 
             # Total loss
+            # 总损失，把回归损失与1分类损失相加，然后在回归损失前面加一个权重系数alpha
             loss_yaw += alpha * loss_reg_yaw
             loss_pitch += alpha * loss_reg_pitch
             loss_roll += alpha * loss_reg_roll
@@ -196,5 +212,6 @@ if __name__ == '__main__':
         # Save models at numbered epochs.
         if epoch % 1 == 0 and epoch < num_epochs:
             print 'Taking snapshot...'
+             # 保存模型,第二个参数是从、保存的地址
             torch.save(model.state_dict(),
             'output/snapshots/' + args.output_string + '_epoch_'+ str(epoch+1) + '.pkl')
